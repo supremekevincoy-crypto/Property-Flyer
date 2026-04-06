@@ -1,5 +1,5 @@
 [phases.setup]
-nixPkgs = ["python311", "pango", "cairo", "gdk-pixbuf", "libffi", "shared-mime-info", "harfbuzz", "fontconfig", "freetype", "gobject-introspection"]
+nixPkgs = ["python311", "pango", "cairo", "gdk-pixbuf", "libffi", "shared-mime-info", "harfbuzz", "fontconfig", "freetype", "gobject-introspection", "glib"]
 
 [variables]
 NIXPACKS_PYTHON_VERSION = "3.11"
