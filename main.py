@@ -1,10 +1,13 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from typing import Optional
 import io
 import base64
+import json
+import re
 import weasyprint
+import httpx
 
 app = FastAPI()
 
@@ -412,6 +415,101 @@ html, body {{
 </div>
 </body>
 </html>"""
+
+
+@app.post("/fetch-property")
+async def fetch_property(url: str = Form(...)):
+    """Fetch property data from a Zillow listing URL."""
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/122.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+    }
+
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=15) as client:
+            resp = await client.get(url, headers=headers)
+            html = resp.text
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not fetch Zillow page: {str(e)}")
+
+    # Zillow embeds all listing data in a __NEXT_DATA__ JSON script tag
+    match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', html, re.DOTALL)
+    if not match:
+        raise HTTPException(status_code=422, detail="Could not find property data on this page. Make sure it's a valid Zillow listing URL.")
+
+    try:
+        data = json.loads(match.group(1))
+        # Navigate to the property data — path varies slightly by listing type
+        props = data["props"]["pageProps"]
+        gdp = props.get("gdpClientCache") or props.get("componentProps", {})
+
+        # Try multiple known paths Zillow uses
+        home = None
+        if "gdpClientCache" in props:
+            cache = props["gdpClientCache"]
+            first_key = next(iter(cache))
+            home = cache[first_key].get("property") or cache[first_key]
+        elif "homeDetails" in props:
+            home = props["homeDetails"]
+        elif "property" in props:
+            home = props["property"]
+
+        if not home:
+            raise HTTPException(status_code=422, detail="Property data structure not recognized. Try copying the URL directly from the Zillow listing page.")
+
+        # Extract fields
+        address_obj = home.get("address", {})
+        street = address_obj.get("streetAddress", "")
+        city = address_obj.get("city", "")
+        state = address_obj.get("state", "")
+        zipcode = address_obj.get("zipcode", "")
+        full_address = f"{street}, {city}, {state} {zipcode}".strip(", ")
+
+        price_raw = home.get("price") or home.get("listingPrice") or 0
+        price = f"{int(price_raw):,}" if price_raw else ""
+
+        beds = str(home.get("bedrooms") or home.get("beds") or "")
+        baths_full = home.get("bathrooms") or home.get("baths") or ""
+        baths = str(int(baths_full) if baths_full and float(baths_full) == int(float(baths_full)) else baths_full)
+
+        description = home.get("description") or ""
+
+        # Photos
+        photos = []
+        raw_photos = home.get("photos") or home.get("originalPhotos") or []
+        for p in raw_photos:
+            if isinstance(p, dict):
+                # Zillow photo objects have a 'mixedSources' or 'url' key
+                mixed = p.get("mixedSources", {})
+                jpeg_list = mixed.get("jpeg") or mixed.get("webp") or []
+                if jpeg_list:
+                    # Get highest resolution
+                    best = jpeg_list[-1].get("url") or jpeg_list[0].get("url")
+                    if best:
+                        photos.append(best)
+                elif p.get("url"):
+                    photos.append(p["url"])
+
+        return JSONResponse({
+            "address": full_address,
+            "price": price,
+            "bedrooms": beds,
+            "bathrooms": baths,
+            "description": description,
+            "photos": photos[:20],  # Return up to 20 photos for picker
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Error parsing property data: {str(e)}")
 
 
 @app.post("/generate")
