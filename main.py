@@ -3,11 +3,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
 from typing import Optional
 import io
-import base64
 import json
 import re
-import weasyprint
 import httpx
+
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.units import inch
+from reportlab.lib.colors import HexColor, white
+from reportlab.lib.styles import ParagraphStyle
+from reportlab.lib.enums import TA_JUSTIFY
+from reportlab.platypus import Paragraph as Para
+from reportlab.pdfgen import canvas
+from reportlab.lib.utils import ImageReader
+from PIL import Image as PILImage
 
 app = FastAPI()
 
@@ -18,439 +26,256 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+NAVY = HexColor("#001A40")
+RED = HexColor("#FF4040")
+BLUE = HexColor("#50B0FF")
+LIGHT_BLUE = HexColor("#A6DEFF")
+GRAY = HexColor("#888888")
+LIGHT_GRAY = HexColor("#f5f5f5")
+DARK_GRAY = HexColor("#444444")
+DIVIDER = HexColor("#e0e0e0")
+
 LEGAL_TEXT = (
-    "Notices. Everett Financial, Inc. dba Supreme Lending, NMLS ID #2129 (www.nmlsconsumeraccess.org), "
-    "14801 Quorum Drive, Suite 300, Dallas, TX 75254 (877-350-5225). Solicitations made to and applications "
-    "accepted from residents in AL, AK, AZ, AR, CA: Licensed by the Department of Financial Protection and "
-    "Innovation under the California Residential Mortgage Lending Act; CO, CT, DE, DC, FL, GA, Hawaii Mortgage "
-    "Loan Originator Company License HI2129, Mortgage Servicer License MS144, ID, IL, IN, IA, KS, KY, LA, ME, "
-    "MD, MA: MA Mortgage Broker License MC2129, MA Mortgage Lender License MC2129, MA Mortgage Servicer License "
-    "LS2129; MI, MN, MS, MO, MT, NE, NH, NJ: Licensed by the N.J. Department of Banking and Insurance; NM, NC, "
-    "ND, NV, Licensed Mortgage Banker -- NYS Banking Department, NY Office: 6325 Sheridan Drive, Suite 1 Buffalo, "
-    "NY 14221, OH, OK, OR, PA, PR, RI, SC, SD, TN, TX, UT, VT, VA, WA, WV, WI, WY. This is not an offer to enter "
-    "into an agreement. Information, rates, and programs are subject to change without prior notice and may not be "
-    "available in all states. All loans are subject to credit and property approval. Supreme Lending is not "
-    "affiliated with any government agency. \u00a9 2026. Everett Financial, Inc. dba Supreme Lending. All rights "
-    "reserved. Equal Housing Opportunity Lender."
+    "Notices. Everett Financial, Inc. dba Supreme Lending, NMLS ID #2129 "
+    "(www.nmlsconsumeraccess.org), 14801 Quorum Drive, Suite 300, Dallas, TX 75254 "
+    "(877-350-5225). Solicitations made to and applications accepted from residents in "
+    "AL, AK, AZ, AR, CA, CO, CT, DE, DC, FL, GA, HI, ID, IL, IN, IA, KS, KY, LA, ME, "
+    "MD, MA, MI, MN, MS, MO, MT, NE, NH, NJ, NM, NC, ND, NV, NY, OH, OK, OR, PA, PR, "
+    "RI, SC, SD, TN, TX, UT, VT, VA, WA, WV, WI, WY. This is not an offer to enter into "
+    "an agreement. Information, rates, and programs are subject to change without prior "
+    "notice and may not be available in all states. All loans are subject to credit and "
+    "property approval. Supreme Lending is not affiliated with any government agency. "
+    "\u00a9 2026. Everett Financial, Inc. dba Supreme Lending. All rights reserved. "
+    "Equal Housing Opportunity Lender."
 )
 
-SL_LOGO_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1366 282.75">
-  <defs><style>.c1{fill:#ff2b46}.c2{fill:#001d49}</style></defs>
-  <g>
-    <path class="c2" d="M13.46,155.65h15.12c.45,7.61,5.15,13.66,16.91,13.66,9.97,0,15.45-4.25,15.45-11.31,0-6.38-4.37-9.18-12.21-10.75l-10.75-2.13c-12.77-2.46-22.4-8.4-22.4-21.62,0-14.45,11.54-22.4,29.45-22.4s29.34,8.18,29.34,23.29h-15.12c0-7.17-5.6-10.97-14.56-10.97-9.97,0-13.66,4.7-13.66,10.08,0,4.37,2.69,8.18,10.53,9.86l10.08,2.02c17.47,3.47,24.86,10.3,24.86,22.51,0,16.13-13.22,23.74-31.13,23.74-20.05,0-31.92-9.63-31.92-25.98Z"/>
-    <path class="c2" d="M89.18,150.84v-48.71h14.78v47.59c0,12.54,6.27,19.04,16.91,19.04s16.8-6.49,16.8-19.04v-47.59h14.89v48.71c0,20.5-12.88,30.8-31.69,30.8s-31.69-10.3-31.69-30.8Z"/>
-    <path class="c2" d="M166.92,102.12h30.8c20.16,0,29.34,10.41,29.34,25.65s-9.18,25.53-29.34,25.53h-16.13v27.21h-14.67v-78.39ZM211.94,127.77c0-7.95-4.7-12.77-14.78-12.77h-15.57v25.42h15.57c10.08,0,14.78-4.82,14.78-12.66Z"/>
-    <path class="c2" d="M238.49,102.12h30.8c20.16,0,29.34,10.41,29.34,25.65,0,11.31-5.15,20.04-16.35,23.63l17.02,29.12h-14.67l-15.57-27.21h-15.9v27.21h-14.67v-78.39ZM283.51,127.77c0-7.95-4.7-12.77-14.78-12.77h-15.57v25.42h15.57c10.08,0,14.78-4.82,14.78-12.66Z"/>
-    <path class="c2" d="M310.85,102.12h52.52v12.88h-37.85v19.94h34.49v11.53h-34.49v21.17h38.97v12.88h-53.64v-78.39Z"/>
-    <path class="c2" d="M375.92,102.12h18.37l22.85,58.57,22.85-58.57h18.37v78.39h-14.67v-52.64h-.56l-20.38,52.64h-11.2l-20.49-52.64h-.45v52.64h-14.67v-78.39Z"/>
-    <path class="c2" d="M473.14,102.12h52.52v12.88h-37.85v19.94h34.49v11.53h-34.49v21.17h38.97v12.88h-53.64v-78.39Z"/>
-  </g>
-  <g>
-    <path class="c2" d="M889.39,102.12h14.67v65.51h37.18v12.88h-51.85v-78.39Z"/>
-    <path class="c2" d="M952.68,102.12h52.52v12.88h-37.85v19.94h34.49v11.53h-34.49v21.17h38.97v12.88h-53.64v-78.39Z"/>
-    <path class="c2" d="M1017.76,102.12h15.45l34.27,54.99h.34v-54.99h14.78v78.39h-16.13l-33.71-54.09h-.34v54.09h-14.67v-78.39Z"/>
-    <path class="c2" d="M1097.39,102.12h28.45c24.53,0,37.07,14.11,37.07,39.2s-12.54,39.2-37.07,39.2h-28.45v-78.39ZM1147.9,141.32c0-18.25-6.38-26.32-23.52-26.32h-12.32v52.64h12.32c17.13,0,23.52-8.06,23.52-26.32Z"/>
-    <path class="c2" d="M1175.58,102.12h14.67v78.39h-14.67v-78.39Z"/>
-    <path class="c2" d="M1205.03,102.12h15.45l34.27,54.99h.34v-54.99h14.78v78.39h-16.13l-33.71-54.09h-.34v54.09h-14.67v-78.39Z"/>
-    <path class="c2" d="M1282.43,141.65c0-26.09,14.33-40.54,36.06-40.54,16.01,0,29.68,7.84,32.25,24.53h-14.67c-2.46-8.96-10.08-11.76-17.58-11.76-14.78,0-21.28,11.09-21.28,27.33s6.72,27.66,21.5,27.66c9.86,0,19.15-5.04,19.15-18.81h-16.35v-11.87h31.02v7.39c0,23.74-12.66,36.06-33.82,36.06-23.07,0-36.28-14.78-36.28-39.98Z"/>
-  </g>
-  <path class="c1" d="M708.09,8.42c-73.43,0-132.96,59.53-132.96,132.96s59.53,132.96,132.96,132.96,132.96-59.53,132.96-132.96S781.52,8.42,708.09,8.42ZM787.39,209.19h-158.6v-16.49h139.21v-38.56h-109.53v-17.81h128.92v72.87ZM648.2,126.04v38.37h109.53v18h-128.94v-56.45h-23.64l102.95-79.94,102.93,79.94-162.83.08Z"/>
-</svg>'''
 
-EQUAL_HOUSING_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-  <rect width="100" height="100" fill="none" stroke="#000" stroke-width="4"/>
-  <polygon points="50,10 90,45 80,45 80,85 60,85 60,60 40,60 40,85 20,85 20,45 10,45" fill="#000"/>
-  <rect x="35" y="70" width="30" height="4" fill="#000"/>
-  <rect x="35" y="78" width="30" height="4" fill="#000"/>
-</svg>'''
+def bytes_to_image_reader(data: bytes) -> ImageReader:
+    img = PILImage.open(io.BytesIO(data))
+    if img.mode in ("RGBA", "P", "LA"):
+        img = img.convert("RGB")
+    out = io.BytesIO()
+    img.save(out, format="JPEG", quality=90)
+    out.seek(0)
+    return ImageReader(out)
 
 
-def file_to_b64(data: bytes, mime: str) -> str:
-    return f"data:{mime};base64,{base64.b64encode(data).decode()}"
+def draw_flyer(d: dict) -> bytes:
+    buf = io.BytesIO()
+    W, H = letter
+    c = canvas.Canvas(buf, pagesize=letter)
+    margin = 0.35 * inch
+    content_w = W - 2 * margin
 
+    # HERO IMAGE
+    hero_h = 3.0 * inch
+    hero_reader = bytes_to_image_reader(d["hero_bytes"])
+    c.drawImage(hero_reader, 0, H - hero_h, W, hero_h, preserveAspectRatio=False)
 
-def detect_mime(filename: str) -> str:
-    ext = filename.lower().rsplit(".", 1)[-1]
-    return {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
-            "gif": "image/gif", "webp": "image/webp", "svg": "image/svg+xml"}.get(ext, "image/jpeg")
+    # Price box overlay
+    box_w = 1.6 * inch
+    box_h = 0.78 * inch
+    c.setFillColor(NAVY)
+    c.setFillAlpha(0.88)
+    c.rect(0, H - box_h, box_w, box_h, fill=1, stroke=0)
+    c.setFillAlpha(1)
+    c.setFillColor(white)
+    c.setFont("Helvetica-Bold", 16)
+    c.drawString(10, H - 24, f"${d['price']}")
+    c.setFont("Helvetica", 8.5)
+    c.drawString(10, H - 37, f"{d['bedrooms']} Bedrooms")
+    c.drawString(10, H - 49, f"{d['bathrooms']} Bathrooms")
 
+    y = H - hero_h
 
-def build_html(d: dict) -> str:
-    open_house_row = ""
-    if d.get("open_house"):
-        open_house_row = f'<div class="open-house">OPEN HOUSE &nbsp;|&nbsp; {d["open_house"].upper()}</div>'
+    # ADDRESS BAR
+    has_oh = bool(d.get("open_house", "").strip())
+    addr_h = 0.78 * inch if has_oh else 0.6 * inch
+    c.setFillColor(LIGHT_BLUE)
+    c.rect(0, y - addr_h, W, addr_h, fill=1, stroke=0)
 
-    realtor_direct = f'<div class="ci-line">Direct: {d["realtor_direct"]}</div>' if d.get("realtor_direct") else ""
-    realtor_cell = f'<div class="ci-line">Cell: {d["realtor_cell"]}</div>' if d.get("realtor_cell") else ""
-    realtor_website = f'<div class="ci-line ci-link">{d["realtor_website"]}</div>' if d.get("realtor_website") else ""
-    realtor_email = f'<div class="ci-line ci-link">{d["realtor_email"]}</div>' if d.get("realtor_email") else ""
-    realtor_company = f'<div class="ci-line">{d["realtor_company"]}</div>' if d.get("realtor_company") else ""
+    addr = d["address"].upper()
+    addr_fs = 17
+    c.setFillColor(NAVY)
+    while c.stringWidth(addr, "Helvetica-Bold", addr_fs) > content_w - 20 and addr_fs > 10:
+        addr_fs -= 1
+    c.setFont("Helvetica-Bold", addr_fs)
+    if has_oh:
+        c.drawCentredString(W / 2, y - addr_h + addr_h * 0.62, addr)
+        c.setFont("Helvetica", 9)
+        c.drawCentredString(W / 2, y - addr_h + addr_h * 0.22,
+                           f"OPEN HOUSE  |  {d['open_house'].upper()}")
+    else:
+        c.drawCentredString(W / 2, y - addr_h + addr_h * 0.38, addr)
 
-    lo_direct = f'<div class="ci-line">Direct: {d["lo_direct"]}</div>' if d.get("lo_direct") else ""
-    lo_cell = f'<div class="ci-line">Cell: {d["lo_cell"]}</div>' if d.get("lo_cell") else ""
-    lo_website = f'<div class="ci-line ci-link">{d["lo_website"]}</div>' if d.get("lo_website") else ""
-    lo_email = f'<div class="ci-line ci-link">{d["lo_email"]}</div>' if d.get("lo_email") else ""
-    lo_address = f'<div class="ci-line">{d["lo_address"]}</div>' if d.get("lo_address") else ""
+    y -= addr_h
 
-    realtor_logo_html = ""
-    if d.get("realtor_logo_b64"):
-        realtor_logo_html = f'<img class="realtor-logo" src="{d["realtor_logo_b64"]}" />'
+    # INTERIOR PHOTOS
+    photo_h = 1.28 * inch
+    gap = 4
+    photo_w = (W - 2 * gap) / 3
+    for i, key in enumerate(["photo2_bytes", "photo3_bytes", "photo4_bytes"]):
+        ph = d.get(key)
+        if ph:
+            try:
+                pr = bytes_to_image_reader(ph)
+                c.drawImage(pr, i * (photo_w + gap), y - photo_h,
+                           photo_w, photo_h, preserveAspectRatio=False)
+            except:
+                pass
+    y -= photo_h + 5
 
-    return f"""<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8"/>
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,400;0,600;0,700;0,800;0,900;1,600;1,700&display=swap');
+    # DESCRIPTION
+    desc_style = ParagraphStyle(
+        "desc", fontName="Helvetica", fontSize=7.5,
+        textColor=DARK_GRAY, leading=11.5, alignment=TA_JUSTIFY,
+    )
+    desc_para = Para(d.get("description", ""), desc_style)
+    _, desc_h = desc_para.wrap(content_w, 999)
+    desc_para.drawOn(c, margin, y - desc_h - 4)
+    y -= desc_h + 10
 
-* {{ margin:0; padding:0; box-sizing:border-box; }}
+    # DIVIDER
+    c.setStrokeColor(DIVIDER)
+    c.setLineWidth(0.5)
+    c.line(margin, y, W - margin, y)
+    y -= 8
 
-html, body {{
-  width: 8.5in;
-  height: 11in;
-  font-family: 'Montserrat', sans-serif;
-  background: white;
-  overflow: hidden;
-}}
+    # CONTACT SECTION
+    col_w = content_w / 2
+    hs = 0.7 * inch
 
-.page {{
-  width: 8.5in;
-  height: 11in;
-  display: flex;
-  flex-direction: column;
-}}
+    def draw_contact(x_off, name, title, direct, cell, website, email, hs_bytes, label):
+        cx = margin + x_off
+        # Header
+        c.setFont("Helvetica-BoldOblique", 8)
+        c.setFillColor(DARK_GRAY)
+        c.drawString(cx, y - 10, "Call ")
+        w1 = c.stringWidth("Call ", "Helvetica-BoldOblique", 8)
+        c.setFillColor(RED)
+        c.drawString(cx + w1, y - 10, "Today")
+        w2 = c.stringWidth("Today", "Helvetica-BoldOblique", 8)
+        c.setFillColor(DARK_GRAY)
+        c.drawString(cx + w1 + w2, y - 10, f" for {label}")
 
-/* ── Hero ── */
-.hero {{
-  position: relative;
-  width: 100%;
-  height: 3.05in;
-  flex-shrink: 0;
-  background: #0a1e3c;
-}}
+        # Headshot
+        if hs_bytes:
+            try:
+                hr = bytes_to_image_reader(hs_bytes)
+                c.drawImage(hr, cx, y - 14 - hs, hs, hs, preserveAspectRatio=False)
+            except:
+                pass
 
-.hero-img {{
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-}}
+        # Info
+        tx = cx + hs + 7
+        ty = y - 22
+        c.setFont("Helvetica-Bold", 9)
+        c.setFillColor(NAVY)
+        c.drawString(tx, ty, name or "")
+        ty -= 11
+        c.setFont("Helvetica", 7.5)
+        c.setFillColor(DARK_GRAY)
+        if title:
+            c.drawString(tx, ty, title)
+            ty -= 10
+        if direct:
+            c.drawString(tx, ty, f"Direct: {direct}")
+            ty -= 10
+        if cell:
+            c.drawString(tx, ty, f"Cell: {cell}")
+            ty -= 10
+        c.setFillColor(BLUE)
+        if website:
+            c.drawString(tx, ty, website)
+            ty -= 10
+        if email:
+            c.drawString(tx, ty, email)
+            ty -= 10
+        c.setFillColor(DARK_GRAY)
+        if d.get("lo_address") and label == "Mortgage Information":
+            addr_lines = (d.get("lo_address") or "").split(",")
+            for line in addr_lines[:2]:
+                c.drawString(tx, ty, line.strip())
+                ty -= 10
 
-.price-box {{
-  position: absolute;
-  top: 0;
-  left: 0;
-  background: rgba(10, 30, 60, 0.88);
-  color: white;
-  padding: 10px 18px 12px;
-  min-width: 1.6in;
-}}
+    draw_contact(0,
+        d.get("realtor_name", ""), d.get("realtor_title", "REALTOR"),
+        d.get("realtor_direct"), d.get("realtor_cell"),
+        d.get("realtor_website"), d.get("realtor_email"),
+        d.get("realtor_headshot_bytes"), "Property Information")
 
-.price-box .price {{
-  font-size: 26pt;
-  font-weight: 800;
-  color: white;
-  line-height: 1;
-}}
+    draw_contact(col_w,
+        d.get("lo_name", ""), f"Loan Officer NMLS#{d.get('lo_nmls', '')}",
+        d.get("lo_direct"), d.get("lo_cell"),
+        d.get("lo_website"), d.get("lo_email"),
+        d.get("lo_headshot_bytes"), "Mortgage Information")
 
-.price-box .prop-detail {{
-  font-size: 10pt;
-  font-weight: 600;
-  color: white;
-  line-height: 1.5;
-}}
+    y -= hs + 20
 
-/* ── Address Bar ── */
-.address-bar {{
-  background: #c2d9ed;
-  padding: 10px 28px 8px;
-  flex-shrink: 0;
-  border-radius: 0 0 8px 8px;
-}}
+    # LOGO ROW
+    if d.get("realtor_logo_bytes"):
+        try:
+            rl = bytes_to_image_reader(d["realtor_logo_bytes"])
+            c.drawImage(rl, margin, y - 0.55 * inch,
+                       1.3 * inch, 0.5 * inch, preserveAspectRatio=True)
+        except:
+            pass
 
-.address-bar .address {{
-  font-size: 21pt;
-  font-weight: 900;
-  color: #0a1e3c;
-  line-height: 1.15;
-  letter-spacing: -0.01em;
-}}
+    # Supreme Lending logo (text-based)
+    sl_x = W - margin - 1.85 * inch
+    sl_y = y - 0.45 * inch
+    c.setFillColor(NAVY)
+    c.setFont("Helvetica-Bold", 12)
+    c.drawString(sl_x, sl_y + 18, "SUPREME")
+    c.setFillColor(RED)
+    c.circle(sl_x + 70, sl_y + 22, 9, fill=1, stroke=0)
+    c.setFillColor(white)
+    c.setFont("Helvetica-Bold", 6)
+    c.drawCentredString(sl_x + 70, sl_y + 19, "SL")
+    c.setFillColor(NAVY)
+    c.setFont("Helvetica-Bold", 12)
+    c.drawString(sl_x + 83, sl_y + 18, "LENDING")
 
-.open-house {{
-  font-size: 10.5pt;
-  font-weight: 700;
-  color: #0a1e3c;
-  letter-spacing: 0.04em;
-  margin-top: 2px;
-}}
+    y -= 0.6 * inch
 
-/* ── Interior Photos ── */
-.photo-row {{
-  display: flex;
-  gap: 5px;
-  padding: 8px 10px 6px;
-  flex-shrink: 0;
-}}
+    # LEGAL
+    legal_style = ParagraphStyle(
+        "legal", fontName="Helvetica", fontSize=4.3,
+        textColor=GRAY, leading=6, alignment=TA_JUSTIFY,
+    )
+    legal_para = Para(LEGAL_TEXT, legal_style)
+    _, lh = legal_para.wrap(content_w, 999)
+    legal_para.drawOn(c, margin, 5)
 
-.photo-row img {{
-  flex: 1;
-  height: 1.3in;
-  object-fit: cover;
-  display: block;
-  border-radius: 2px;
-}}
-
-/* ── Description ── */
-.description {{
-  padding: 4px 28px 6px;
-  font-size: 8pt;
-  line-height: 1.55;
-  text-align: justify;
-  color: #1a1a1a;
-  flex-shrink: 0;
-}}
-
-/* ── Divider ── */
-.divider {{
-  border: none;
-  border-top: 1px solid #d0d0d0;
-  margin: 5px 24px;
-  flex-shrink: 0;
-}}
-
-/* ── Contact Section ── */
-.contact-section {{
-  display: flex;
-  padding: 4px 22px 0;
-  gap: 16px;
-  flex-shrink: 0;
-}}
-
-.contact-col {{
-  flex: 1;
-}}
-
-.contact-header {{
-  font-style: italic;
-  font-size: 10.5pt;
-  color: #222;
-  font-weight: 600;
-  margin-bottom: 6px;
-}}
-
-.contact-header .today {{
-  color: #e84040;
-  font-style: italic;
-  font-weight: 700;
-}}
-
-.contact-body {{
-  display: flex;
-  gap: 10px;
-  align-items: flex-start;
-}}
-
-.contact-headshot {{
-  width: 0.88in;
-  height: 0.88in;
-  object-fit: cover;
-  object-position: top center;
-  flex-shrink: 0;
-  border-radius: 2px;
-}}
-
-.contact-info .ci-name {{
-  font-size: 10.5pt;
-  font-weight: 800;
-  color: #0a1e3c;
-  line-height: 1.3;
-}}
-
-.contact-info .ci-line {{
-  font-size: 7.8pt;
-  color: #222;
-  line-height: 1.55;
-}}
-
-.contact-info .ci-link {{
-  color: #1a5fa8;
-}}
-
-/* ── Logo Row ── */
-.logo-row {{
-  display: flex;
-  padding: 6px 22px 4px;
-  align-items: center;
-  flex-shrink: 0;
-}}
-
-.logo-col {{
-  flex: 1;
-  display: flex;
-  align-items: center;
-}}
-
-.realtor-logo {{
-  max-height: 0.62in;
-  max-width: 2.4in;
-  object-fit: contain;
-}}
-
-.sl-logo-wrap svg {{
-  height: 0.5in;
-  width: auto;
-}}
-
-/* ── Legal Footer ── */
-.legal {{
-  padding: 3px 22px 4px;
-  font-size: 4.8pt;
-  color: #444;
-  line-height: 1.45;
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  flex-shrink: 0;
-  margin-top: auto;
-}}
-
-.eq-housing {{
-  width: 20px;
-  min-width: 20px;
-  margin-top: 1px;
-}}
-</style>
-</head>
-<body>
-<div class="page">
-
-  <!-- Hero -->
-  <div class="hero">
-    <img class="hero-img" src="{d['hero_b64']}" />
-    <div class="price-box">
-      <div class="price">${d['price']}</div>
-      <div class="prop-detail">{d['bedrooms']} Bedrooms</div>
-      <div class="prop-detail">{d['bathrooms']} Bathrooms</div>
-    </div>
-  </div>
-
-  <!-- Address Bar -->
-  <div class="address-bar">
-    <div class="address">{d['address']}</div>
-    {open_house_row}
-  </div>
-
-  <!-- Interior Photos -->
-  <div class="photo-row">
-    <img src="{d['photo2_b64']}" />
-    <img src="{d['photo3_b64']}" />
-    <img src="{d['photo4_b64']}" />
-  </div>
-
-  <!-- Description -->
-  <div class="description">{d['description']}</div>
-
-  <!-- Divider -->
-  <hr class="divider" />
-
-  <!-- Contact Section -->
-  <div class="contact-section">
-
-    <!-- Realtor -->
-    <div class="contact-col">
-      <div class="contact-header"><em>Call <span class="today">Today</span> for Property Information</em></div>
-      <div class="contact-body">
-        <img class="contact-headshot" src="{d['realtor_headshot_b64']}" />
-        <div class="contact-info">
-          <div class="ci-name">{d['realtor_name']}</div>
-          <div class="ci-line">{d['realtor_title']}</div>
-          {realtor_company}
-          {realtor_direct}
-          {realtor_cell}
-          {realtor_website}
-          {realtor_email}
-        </div>
-      </div>
-    </div>
-
-    <!-- LO -->
-    <div class="contact-col">
-      <div class="contact-header"><em>Call <span class="today">Today</span> for Mortgage Information</em></div>
-      <div class="contact-body">
-        <img class="contact-headshot" src="{d['lo_headshot_b64']}" />
-        <div class="contact-info">
-          <div class="ci-name">{d['lo_name']}</div>
-          <div class="ci-line">Loan Officer NMLS#{d['lo_nmls']}</div>
-          {lo_direct}
-          {lo_cell}
-          {lo_website}
-          {lo_email}
-          {lo_address}
-        </div>
-      </div>
-    </div>
-
-  </div>
-
-  <!-- Logo Row -->
-  <div class="logo-row">
-    <div class="logo-col">
-      {realtor_logo_html}
-    </div>
-    <div class="logo-col">
-      <div class="sl-logo-wrap">{SL_LOGO_SVG}</div>
-    </div>
-  </div>
-
-  <!-- Legal Footer -->
-  <div class="legal">
-    <svg class="eq-housing" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 110">
-      <rect x="2" y="2" width="96" height="96" fill="none" stroke="#333" stroke-width="5"/>
-      <polygon points="50,8 92,44 82,44 82,90 60,90 60,65 40,65 40,90 18,90 18,44 8,44" fill="#333"/>
-      <rect x="30" y="98" width="40" height="6" fill="#333"/>
-    </svg>
-    <div>{LEGAL_TEXT}</div>
-  </div>
-
-</div>
-</body>
-</html>"""
+    c.save()
+    buf.seek(0)
+    return buf.read()
 
 
 @app.post("/fetch-property")
 async def fetch_property(url: str = Form(...)):
-    """Fetch property data from a Zillow listing URL."""
     headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/122.0.0.0 Safari/537.36"
-        ),
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Connection": "keep-alive",
     }
-
     try:
         async with httpx.AsyncClient(follow_redirects=True, timeout=15) as client:
             resp = await client.get(url, headers=headers)
             html = resp.text
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Could not fetch Zillow page: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Could not fetch page: {str(e)}")
 
-    # Zillow embeds all listing data in a __NEXT_DATA__ JSON script tag
-    match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', html, re.DOTALL)
+    match = re.search(
+        r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>',
+        html, re.DOTALL)
     if not match:
-        raise HTTPException(status_code=422, detail="Could not find property data on this page. Make sure it's a valid Zillow listing URL.")
+        raise HTTPException(status_code=422,
+            detail="Could not find property data. Make sure it is a valid Zillow listing URL.")
 
     try:
         data = json.loads(match.group(1))
-        # Navigate to the property data — path varies slightly by listing type
         props = data["props"]["pageProps"]
-        gdp = props.get("gdpClientCache") or props.get("componentProps", {})
-
-        # Try multiple known paths Zillow uses
         home = None
         if "gdpClientCache" in props:
             cache = props["gdpClientCache"]
@@ -460,37 +285,28 @@ async def fetch_property(url: str = Form(...)):
             home = props["homeDetails"]
         elif "property" in props:
             home = props["property"]
-
         if not home:
-            raise HTTPException(status_code=422, detail="Property data structure not recognized. Try copying the URL directly from the Zillow listing page.")
+            raise HTTPException(status_code=422, detail="Property data not found.")
 
-        # Extract fields
         address_obj = home.get("address", {})
-        street = address_obj.get("streetAddress", "")
-        city = address_obj.get("city", "")
-        state = address_obj.get("state", "")
-        zipcode = address_obj.get("zipcode", "")
-        full_address = f"{street}, {city}, {state} {zipcode}".strip(", ")
-
+        full_address = ", ".join(filter(None, [
+            address_obj.get("streetAddress"),
+            address_obj.get("city"),
+            f"{address_obj.get('state', '')} {address_obj.get('zipcode', '')}".strip()
+        ]))
         price_raw = home.get("price") or home.get("listingPrice") or 0
         price = f"{int(price_raw):,}" if price_raw else ""
-
         beds = str(home.get("bedrooms") or home.get("beds") or "")
-        baths_full = home.get("bathrooms") or home.get("baths") or ""
-        baths = str(int(baths_full) if baths_full and float(baths_full) == int(float(baths_full)) else baths_full)
-
+        baths_raw = home.get("bathrooms") or home.get("baths") or ""
+        baths = str(int(float(baths_raw)) if baths_raw and float(baths_raw) == int(float(baths_raw)) else baths_raw)
         description = home.get("description") or ""
 
-        # Photos
         photos = []
-        raw_photos = home.get("photos") or home.get("originalPhotos") or []
-        for p in raw_photos:
+        for p in (home.get("photos") or home.get("originalPhotos") or []):
             if isinstance(p, dict):
-                # Zillow photo objects have a 'mixedSources' or 'url' key
                 mixed = p.get("mixedSources", {})
                 jpeg_list = mixed.get("jpeg") or mixed.get("webp") or []
                 if jpeg_list:
-                    # Get highest resolution
                     best = jpeg_list[-1].get("url") or jpeg_list[0].get("url")
                     if best:
                         photos.append(best)
@@ -503,13 +319,12 @@ async def fetch_property(url: str = Form(...)):
             "bedrooms": beds,
             "bathrooms": baths,
             "description": description,
-            "photos": photos[:20],  # Return up to 20 photos for picker
+            "photos": photos[:20],
         })
-
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=422, detail=f"Error parsing property data: {str(e)}")
+        raise HTTPException(status_code=422, detail=f"Error parsing: {str(e)}")
 
 
 @app.post("/generate")
@@ -543,61 +358,36 @@ async def generate_flyer(
     realtor_logo: Optional[UploadFile] = File(None),
 ):
     try:
-        def b64(f): 
-            data = f
-            mime = detect_mime(f.filename) if hasattr(f, 'filename') else "image/jpeg"
-            return file_to_b64(data, mime)
-
-        async def read_b64(f: UploadFile):
-            data = await f.read()
-            return file_to_b64(data, detect_mime(f.filename))
-
         d = {
-            "address": address,
-            "price": price,
-            "bedrooms": bedrooms,
-            "bathrooms": bathrooms,
-            "description": description,
-            "open_house": open_house,
-            "realtor_name": realtor_name,
-            "realtor_title": realtor_title,
-            "realtor_company": realtor_company,
-            "realtor_direct": realtor_direct,
-            "realtor_cell": realtor_cell,
-            "realtor_website": realtor_website,
-            "realtor_email": realtor_email,
-            "lo_name": lo_name,
-            "lo_nmls": lo_nmls,
-            "lo_direct": lo_direct,
-            "lo_cell": lo_cell,
-            "lo_website": lo_website,
-            "lo_email": lo_email,
-            "lo_address": lo_address,
-            "hero_b64": await read_b64(hero_photo),
-            "photo2_b64": await read_b64(photo2),
-            "photo3_b64": await read_b64(photo3),
-            "photo4_b64": await read_b64(photo4),
-            "realtor_headshot_b64": await read_b64(realtor_headshot),
-            "lo_headshot_b64": await read_b64(lo_headshot),
-            "realtor_logo_b64": await read_b64(realtor_logo) if realtor_logo and realtor_logo.filename else None,
+            "address": address, "price": price,
+            "bedrooms": bedrooms, "bathrooms": bathrooms,
+            "description": description, "open_house": open_house,
+            "realtor_name": realtor_name, "realtor_title": realtor_title,
+            "realtor_company": realtor_company, "realtor_direct": realtor_direct,
+            "realtor_cell": realtor_cell, "realtor_website": realtor_website,
+            "realtor_email": realtor_email, "lo_name": lo_name, "lo_nmls": lo_nmls,
+            "lo_direct": lo_direct, "lo_cell": lo_cell, "lo_website": lo_website,
+            "lo_email": lo_email, "lo_address": lo_address,
+            "hero_bytes": await hero_photo.read(),
+            "photo2_bytes": await photo2.read(),
+            "photo3_bytes": await photo3.read(),
+            "photo4_bytes": await photo4.read(),
+            "realtor_headshot_bytes": await realtor_headshot.read(),
+            "lo_headshot_bytes": await lo_headshot.read(),
+            "realtor_logo_bytes": await realtor_logo.read() if realtor_logo and realtor_logo.filename else None,
         }
-
-        html = build_html(d)
-        pdf_bytes = weasyprint.HTML(string=html, base_url=None).write_pdf()
-
-        safe_address = address.replace(",", "").replace(" ", "_")[:40]
-        filename = f"OpenHouse_{safe_address}.pdf"
-
+        pdf_bytes = draw_flyer(d)
+        safe_addr = address.replace(",", "").replace(" ", "_")[:40]
         return StreamingResponse(
             io.BytesIO(pdf_bytes),
             media_type="application/pdf",
             headers={
-                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Content-Disposition": f'attachment; filename="OpenHouse_{safe_addr}.pdf"',
                 "Access-Control-Expose-Headers": "Content-Disposition",
             },
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error generating flyer: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 
 @app.get("/health")
