@@ -1,5 +1,6 @@
 fastapi
 uvicorn
 python-multipart
-weasyprint==60.0
+reportlab
 httpx
+Pillow
